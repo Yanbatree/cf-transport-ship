@@ -179,7 +179,7 @@
     <div class="panel">
       <div id="overlayMsg"></div>
       <h1>CF · 运输船</h1>
-      <div class="sub">穿越火线经典地图 · 网页复刻演示</div>
+      <div class="sub">穿越火线经典地图 · 网页复刻演示 · v1.4</div>
       <div class="controls">
         <div><b>WASD</b>移动</div><div><b>鼠标</b>瞄准</div><div><b>左键</b>射击</div>
         <div><b>Shift</b>疾跑</div><div><b>Space</b>跳跃</div><div><b>C</b>下蹲</div>
@@ -1522,6 +1522,7 @@ const joy = { active:false, baseX:0, baseY:0, x:0, y:0 };
 let aimLocked = false;       // 指针锁定是否生效
 let lockEverWorked = false;  // 锁定是否曾经成功过
 let dragActive = false, dragMove = 0, dragLastX = 0, dragLastY = 0;
+let dragBaseX = 0, dragBaseY = 0, dragBaseYaw = 0, dragBasePitch = 0;
 let dragFirePending = false, dragFireTimer = 0;
 
 addEventListener('keydown', e => {
@@ -1538,18 +1539,24 @@ addEventListener('keyup', e => { keys[e.code] = false; });
 
 function applyLook(dx, dy){
   const sens = 0.0021;
-  player.yaw -= dx * sens;
-  player.pitch = clamp(player.pitch - dy * sens, -1.45, 1.45);
+  player.yaw -= clamp(dx, -100, 100) * sens;
+  player.pitch = clamp(player.pitch - clamp(dy, -100, 100) * sens, -1.45, 1.45);
   player.turnVel = clamp(player.turnVel + dx * 0.004, -0.2, 0.2);
 }
 addEventListener('mousemove', e => {
+  // 触屏设备的合成鼠标事件交给 touch 处理，避免双重响应
+  if(e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
   if(aimLocked){ applyLook(e.movementX, e.movementY); return; }
   if(dragActive && (e.buttons & 1)){
-    // 用 clientX 差值（全浏览器可靠），限幅防止事件间隔突跳
-    const dx = clamp(e.clientX - dragLastX, -60, 60);
-    const dy = clamp(e.clientY - dragLastY, -60, 60);
-    dragLastX = e.clientX; dragLastY = e.clientY;
-    applyLook(dx, dy);
+    // 绝对位置追踪：视角 = 按下时视角 + 位移×灵敏度（丢事件不漂移、重复事件不叠加）
+    // 坐标限幅防单事件突跳
+    const nx = clamp(e.clientX, dragLastX - 60, dragLastX + 60);
+    const ny = clamp(e.clientY, dragLastY - 60, dragLastY + 60);
+    const dx = nx - dragLastX, dy = ny - dragLastY;
+    dragLastX = nx; dragLastY = ny;
+    player.yaw = dragBaseYaw - (nx - dragBaseX) * 0.003;
+    player.pitch = clamp(dragBasePitch - (ny - dragBaseY) * 0.003, -1.45, 1.45);
+    player.turnVel = clamp(player.turnVel + dx * 0.004, -0.2, 0.2);
     dragMove += Math.abs(dx) + Math.abs(dy);
     if(dragMove > 6){
       dragFirePending = false; // 拖拽=转向，取消开火
@@ -1559,6 +1566,7 @@ addEventListener('mousemove', e => {
 });
 addEventListener('mousedown', e => {
   if(e.target && e.target.id === 'adsBtn') return;
+  if(e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents) return;
   if(state !== 'playing' || !player.alive) return;
   if(e.button === 2){
     // 右键：开镜/收镜
@@ -1569,6 +1577,8 @@ addEventListener('mousedown', e => {
     if(!aimLocked){
       dragActive = true; dragMove = 0;
       dragLastX = e.clientX; dragLastY = e.clientY;
+      dragBaseX = e.clientX; dragBaseY = e.clientY;
+      dragBaseYaw = player.yaw; dragBasePitch = player.pitch;
       // 拖拽模式下自动武器延迟开火：按住不动才射击，一动就是转向
       dragFirePending = curWeapon().auto;
       clearTimeout(dragFireTimer);
@@ -1619,6 +1629,8 @@ addEventListener('touchstart', e => {
   } else {
     dragActive = true; dragMove = 0;
     dragLastX = t.clientX; dragLastY = t.clientY;
+    dragBaseX = t.clientX; dragBaseY = t.clientY;
+    dragBaseYaw = player.yaw; dragBasePitch = player.pitch;
     dragFirePending = curWeapon().auto;
     clearTimeout(dragFireTimer);
     if(dragFirePending){
@@ -1642,10 +1654,14 @@ addEventListener('touchmove', e => {
       $('joyKnob').style.left = (joy.baseX + joy.x * 52) + 'px';
       $('joyKnob').style.top = (joy.baseY + joy.y * 52) + 'px';
     } else if(dragActive){
-      const dx = clamp(t.clientX - dragLastX, -60, 60);
-      const dy = clamp(t.clientY - dragLastY, -60, 60);
-      dragLastX = t.clientX; dragLastY = t.clientY;
-      applyLook(dx, dy);
+      // 绝对位置追踪（同鼠标拖拽）
+      const nx = clamp(t.clientX, dragLastX - 60, dragLastX + 60);
+      const ny = clamp(t.clientY, dragLastY - 60, dragLastY + 60);
+      const dx = nx - dragLastX, dy = ny - dragLastY;
+      dragLastX = nx; dragLastY = ny;
+      player.yaw = dragBaseYaw - (nx - dragBaseX) * 0.0035;
+      player.pitch = clamp(dragBasePitch - (ny - dragBaseY) * 0.0035, -1.45, 1.45);
+      player.turnVel = clamp(player.turnVel + dx * 0.004, -0.2, 0.2);
       dragMove += Math.abs(dx) + Math.abs(dy);
       if(dragMove > 6){
         dragFirePending = false;
@@ -1885,7 +1901,7 @@ function updatePlayer(dt){
     if(keys['ArrowDown']) player.pitch = clamp(player.pitch - 1.8 * dt, -1.45, 1.45);
   }
   // 视角平滑：事件频率不稳时（拖拽/触屏/方向键）在渲染侧按帧插值，杜绝跳变
-  const lookK = 1 - Math.exp(-(aimLocked ? 120 : 25) * dt);
+  const lookK = 1 - Math.exp(-(aimLocked ? 60 : 35) * dt);
   player.smYaw += shortAngle(player.yaw - player.smYaw) * lookK;
   player.smPitch += (player.pitch - player.smPitch) * lookK;
   const sprint = keys['ShiftLeft'] || keys['ShiftRight'];
@@ -2094,7 +2110,21 @@ function loop(){
   if(state === 'playing') update(dt);
   else if(state === 'won'){ updateEffects(dt); updateKillfeed(dt); }
   render();
+  // 低帧率自动降画质（内嵌浏览器/弱设备卡顿会表现为视角跳帧）
+  fpsFrames++;
+  fpsAcc += dt;
+  if(fpsAcc >= 2){
+    const fps = fpsFrames / fpsAcc;
+    if(fps < 35 && !qualityDropped){
+      qualityDropped = true;
+      renderer.setPixelRatio(1);
+      renderer.shadowMap.enabled = false;
+    }
+    fpsFrames = 0;
+    fpsAcc = 0;
+  }
 }
+let fpsFrames = 0, fpsAcc = 0, qualityDropped = false;
 
 if(AUTO){
   // 自动演示模式（用于测试）：直接进入游戏
