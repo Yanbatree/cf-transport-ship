@@ -179,7 +179,7 @@
     <div class="panel">
       <div id="overlayMsg"></div>
       <h1>CF · 运输船</h1>
-      <div class="sub">穿越火线经典地图 · 网页复刻演示 · v1.4</div>
+      <div class="sub">穿越火线经典地图 · 网页复刻演示 · v1.5</div>
       <div class="controls">
         <div><b>WASD</b>移动</div><div><b>鼠标</b>瞄准</div><div><b>左键</b>射击</div>
         <div><b>Shift</b>疾跑</div><div><b>Space</b>跳跃</div><div><b>C</b>下蹲</div>
@@ -259,7 +259,8 @@ sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.left = -80; sun.shadow.camera.right = 80;
 sun.shadow.camera.top = 80;  sun.shadow.camera.bottom = -80;
 sun.shadow.camera.near = 1;  sun.shadow.camera.far = 400;
-sun.shadow.bias = -0.0005;
+sun.shadow.bias = -0.0002;   // 阴影偏移，防止甲板阴影痤疮闪烁
+sun.shadow.normalBias = 0.01;
 scene.add(sun);
 
 function makeGradientTex(w, h, stops){
@@ -328,7 +329,8 @@ const sea = new THREE.Mesh(
   new THREE.PlaneGeometry(1600, 1600),
   new THREE.MeshLambertMaterial({ map:seaTex, color:0x9fc4dd })
 );
-sea.rotation.x = -Math.PI/2; sea.position.y = -0.6;
+sea.rotation.x = -Math.PI/2;
+sea.position.y = -0.9; // 低于船体顶面(-0.6)，避免与船体共面闪烁
 sea.receiveShadow = true;
 scene.add(sea);
 
@@ -437,9 +439,10 @@ function addContainer(x, y, z, sx, sy, sz, mat, collide){
 }
 
 // --- 船体 / 甲板 ---
+// 船体顶面在 y=-0.6（与甲板底面贴合），避免与甲板顶面 y=0 共面产生 Z-fighting 闪烁
 const hullGeo = new THREE.BoxGeometry(94, 7, 42);
 const hull = new THREE.Mesh(hullGeo, [hullMat, hullMat, hullDark, hullDark, hullMat, hullMat]);
-hull.position.set(0, -3.5, 0);
+hull.position.set(0, -4.1, 0);
 hull.receiveShadow = true;
 ship.add(hull);
 obstacleMeshes.push(hull); // 甲板下方
