@@ -215,6 +215,12 @@ const $ = id => document.getElementById(id);
 const clamp = (v,a,b) => v<a?a:(v>b?b:v);
 const rand  = (a,b) => a + Math.random()*(b-a);
 const lerp  = (a,b,t) => a + (b-a)*t;
+// 最短角差（用于视角平滑插值）
+function shortAngle(d){
+  d = (d + Math.PI) % (Math.PI * 2);
+  if(d < 0) d += Math.PI * 2;
+  return d - Math.PI;
+}
 
 window.addEventListener('error', e => {
   const el = $('errlog');
@@ -838,15 +844,15 @@ function randomDeckPoint(){
 function stereoPan(worldPos){
   const dx = worldPos.x - player.pos.x, dz = worldPos.z - player.pos.z;
   const len = Math.hypot(dx, dz) || 1;
-  const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
-  const rx = Math.cos(player.yaw), rz = -Math.sin(player.yaw);
+  const fx = -Math.sin(player.smYaw), fz = -Math.cos(player.smYaw);
+  const rx = Math.cos(player.smYaw), rz = -Math.sin(player.smYaw);
   return clamp((dx*rx + dz*rz) / len, -1, 1);
 }
 // 受击方向指示
 function showDmgInd(fromX, fromZ){
   const dx = fromX - player.pos.x, dz = fromZ - player.pos.z;
-  const fx = -Math.sin(player.yaw), fz = -Math.cos(player.yaw);
-  const rx = Math.cos(player.yaw), rz = -Math.sin(player.yaw);
+  const fx = -Math.sin(player.smYaw), fz = -Math.cos(player.smYaw);
+  const rx = Math.cos(player.smYaw), rz = -Math.sin(player.smYaw);
   const ang = Math.atan2(dx*rx + dz*rz, dx*fx + dz*fz);
   const el = $('dmgInd');
   el.style.transition = 'none';
@@ -920,6 +926,7 @@ const player = {
   pos: new THREE.Vector3(-41.5, 0, 0),
   vel: new THREE.Vector3(),
   yaw: -Math.PI/2, pitch: 0,
+  smYaw: -Math.PI/2, smPitch: 0,
   hp: 100, alive: true,
   kills: 0, deaths: 0, score: 0,
   team: 0,
@@ -1231,6 +1238,7 @@ function respawnPlayer(){
   player.pos.set(-41.5, 0, 0);
   player.vel.set(0,0,0);
   player.yaw = -Math.PI/2; player.pitch = 0;
+  player.smYaw = player.yaw; player.smPitch = 0;
   player.hp = 100;
   player.alive = true;
   player.ads = false;
@@ -1484,7 +1492,7 @@ function drawMinimap(){
   // 玩家
   g.save();
   g.translate(player.pos.x*S+90, player.pos.z*S+90);
-  g.rotate(-player.yaw);
+  g.rotate(-player.smYaw);
   g.fillStyle = '#00e5ff';
   g.strokeStyle = 'rgba(0,0,0,0.8)'; g.lineWidth = 1;
   g.beginPath();
@@ -1514,6 +1522,7 @@ const joy = { active:false, baseX:0, baseY:0, x:0, y:0 };
 let aimLocked = false;       // 指针锁定是否生效
 let lockEverWorked = false;  // 锁定是否曾经成功过
 let dragActive = false, dragMove = 0, dragLastX = 0, dragLastY = 0;
+let dragFirePending = false, dragFireTimer = 0;
 
 addEventListener('keydown', e => {
   keys[e.code] = true;
@@ -1536,12 +1545,16 @@ function applyLook(dx, dy){
 addEventListener('mousemove', e => {
   if(aimLocked){ applyLook(e.movementX, e.movementY); return; }
   if(dragActive && (e.buttons & 1)){
-    const dx = e.movementX !== undefined ? e.movementX : e.clientX - dragLastX;
-    const dy = e.movementY !== undefined ? e.movementY : e.clientY - dragLastY;
+    // 用 clientX 差值（全浏览器可靠），限幅防止事件间隔突跳
+    const dx = clamp(e.clientX - dragLastX, -60, 60);
+    const dy = clamp(e.clientY - dragLastY, -60, 60);
     dragLastX = e.clientX; dragLastY = e.clientY;
     applyLook(dx, dy);
     dragMove += Math.abs(dx) + Math.abs(dy);
-    if(dragMove > 10) player.firing = false; // 拖拽=转向，不再开火
+    if(dragMove > 6){
+      dragFirePending = false; // 拖拽=转向，取消开火
+      player.firing = false;
+    }
   }
 });
 addEventListener('mousedown', e => {
@@ -1553,17 +1566,35 @@ addEventListener('mousedown', e => {
     return;
   }
   if(e.button === 0){
-    player.firing = true;
     if(!aimLocked){
       dragActive = true; dragMove = 0;
       dragLastX = e.clientX; dragLastY = e.clientY;
+      // 拖拽模式下自动武器延迟开火：按住不动才射击，一动就是转向
+      dragFirePending = curWeapon().auto;
+      clearTimeout(dragFireTimer);
+      if(dragFirePending){
+        dragFireTimer = setTimeout(() => {
+          if(dragFirePending && state === 'playing' && player.alive) player.firing = true;
+        }, 100);
+      } else {
+        player.firing = true;
+      }
+      if(!curWeapon().auto) tryFire();
+    } else {
+      player.firing = true;
+      if(!curWeapon().auto) tryFire();
     }
-    if(!curWeapon().auto) tryFire();
   }
 });
 addEventListener('mouseup', e => {
-  if(e.button === 0){ player.firing = false; dragActive = false; }
+  if(e.button === 0){
+    player.firing = false;
+    dragActive = false;
+    dragFirePending = false;
+    clearTimeout(dragFireTimer);
+  }
 });
+addEventListener('blur', () => { player.firing = false; dragActive = false; dragFirePending = false; });
 // 开镜时滚轮切换倍镜：上滚二倍镜，下滚高倍镜
 addEventListener('wheel', e => {
   if(state === 'playing' && player.ads && player.weapon === 'sniper'){
@@ -1588,7 +1619,15 @@ addEventListener('touchstart', e => {
   } else {
     dragActive = true; dragMove = 0;
     dragLastX = t.clientX; dragLastY = t.clientY;
-    player.firing = true;
+    dragFirePending = curWeapon().auto;
+    clearTimeout(dragFireTimer);
+    if(dragFirePending){
+      dragFireTimer = setTimeout(() => {
+        if(dragFirePending && state === 'playing' && player.alive) player.firing = true;
+      }, 100);
+    } else {
+      player.firing = true;
+    }
     if(!curWeapon().auto) tryFire();
   }
   e.preventDefault();
@@ -1603,11 +1642,15 @@ addEventListener('touchmove', e => {
       $('joyKnob').style.left = (joy.baseX + joy.x * 52) + 'px';
       $('joyKnob').style.top = (joy.baseY + joy.y * 52) + 'px';
     } else if(dragActive){
-      const dx = t.clientX - dragLastX, dy = t.clientY - dragLastY;
+      const dx = clamp(t.clientX - dragLastX, -60, 60);
+      const dy = clamp(t.clientY - dragLastY, -60, 60);
       dragLastX = t.clientX; dragLastY = t.clientY;
       applyLook(dx, dy);
       dragMove += Math.abs(dx) + Math.abs(dy);
-      if(dragMove > 10) player.firing = false;
+      if(dragMove > 6){
+        dragFirePending = false;
+        player.firing = false;
+      }
     }
   }
   e.preventDefault();
@@ -1627,6 +1670,8 @@ function pauseGame(){
   $('startBtn').textContent = '点 击 继 续';
   $('overlay').style.display = 'flex';
   player.firing = false;
+  dragActive = false;
+  dragFirePending = false;
 }
 function showAimHint(){
   const el = $('aimHint');
@@ -1839,11 +1884,15 @@ function updatePlayer(dt){
     if(keys['ArrowUp']) player.pitch = clamp(player.pitch + 1.8 * dt, -1.45, 1.45);
     if(keys['ArrowDown']) player.pitch = clamp(player.pitch - 1.8 * dt, -1.45, 1.45);
   }
+  // 视角平滑：事件频率不稳时（拖拽/触屏/方向键）在渲染侧按帧插值，杜绝跳变
+  const lookK = 1 - Math.exp(-(aimLocked ? 120 : 25) * dt);
+  player.smYaw += shortAngle(player.yaw - player.smYaw) * lookK;
+  player.smPitch += (player.pitch - player.smPitch) * lookK;
   const sprint = keys['ShiftLeft'] || keys['ShiftRight'];
   const crouchHeld = keys['KeyC'];
   player.crouch = crouchHeld;
-  const fwd = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
-  const right = new THREE.Vector3(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
+  const fwd = new THREE.Vector3(-Math.sin(player.smYaw), 0, -Math.cos(player.smYaw));
+  const right = new THREE.Vector3(Math.cos(player.smYaw), 0, -Math.sin(player.smYaw));
   const wish = new THREE.Vector3().addScaledVector(fwd, f).addScaledVector(right, r);
   if(wish.lengthSq() > 0.01) wish.normalize();
   const speed = 4.3 * (sprint ? 1.5 : 1) * (crouchHeld ? 0.55 : 1) * (player.ads ? 0.55 : 1);
@@ -1911,7 +1960,7 @@ function updatePlayer(dt){
   const eye = player.crouch ? eyeCrouch : eyeStand;
   camera.position.set(player.pos.x, player.pos.y + eye + bob, player.pos.z);
   if(AUTO && TEST && zTrace.length < 25) zTrace.push(player.pos.z.toFixed(2));
-  camera.rotation.set(player.pitch + player.camKick, player.yaw, player.camRoll);
+  camera.rotation.set(player.smPitch + player.camKick, player.smYaw, player.camRoll);
   let fovTarget = 75;
   if(player.ads){
     const wz = curWeapon();
@@ -2016,6 +2065,7 @@ function runSelfTest(){
     st.id = 'selftest';
     st.style.cssText = 'position:fixed;left:0;bottom:0;background:rgba(0,0,0,.85);color:#0f0;font:10px monospace;z-index:999;white-space:pre-wrap;';
     st.textContent = 'SELFTEST V5 yaw=' + player.yaw.toFixed(3) + ' pitch=' + player.pitch.toFixed(3)
+      + ' smYaw=' + player.smYaw.toFixed(3)
       + ' pos=' + player.pos.x.toFixed(1) + ',' + player.pos.z.toFixed(1)
       + ' camPos=' + camera.position.x.toFixed(1) + ',' + camera.position.y.toFixed(2) + ',' + camera.position.z.toFixed(1)
       + ' state=' + state + ' alive=' + player.alive + ' hp=' + player.hp.toFixed(0)
@@ -2079,6 +2129,19 @@ if(AUTO){
         render();      // dump-dom 模式下 rAF 可能不触发，同步渲染一帧
         runSelfTest(); // 在同一帧内紧接渲染采样
       }, 3200);
+    }
+    if(/[?&]yawjump=1/.test(location.search)){
+      // 测试钩子：目标视角瞬间跳 1.5 弧度，3 帧后输出实际渲染角度，验证平滑插值
+      setTimeout(() => {
+        if(state === 'playing'){
+          player.yaw += 1.5;
+          for(let i = 0; i < 3; i++) update(1/60);
+          selfTestDoneFlag = false;
+          selftestPending = true;
+          render();
+          runSelfTest();
+        }
+      }, 600);
     }
     if(/[?&]win=1/.test(location.search)){
       // 测试钩子：直接触发胜利结算，验证胜利面板流程
